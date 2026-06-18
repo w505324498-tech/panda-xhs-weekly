@@ -14,6 +14,17 @@ MODEL = os.getenv("DEEPSEEK_MODEL", "").strip() or "deepseek-chat"
 
 REQUEST_TIMEOUT = 120
 
+
+def _parse_json(raw: str) -> any:
+    """Parse JSON from LLM response, handling markdown code fences."""
+    import re
+    text = raw.strip()
+    # Strip markdown code fences (```json ... ``` or ``` ... ```)
+    m = re.search(r"```(?:json)?\s*\n?(.*?)\n?```", text, re.DOTALL)
+    if m:
+        text = m.group(1).strip()
+    return json.loads(text)
+
 AUDIENCE_TAGS = ["AI爱好者", "上班族", "内容创作者", "开发者"]
 
 
@@ -94,7 +105,7 @@ def analyze_github_and_pick_best(projects: list[dict]) -> tuple[list[dict], dict
     try:
         raw = _chat(prompt, max_tokens=4000)
         logger.info("GitHub analysis generated")
-        data = json.loads(raw)
+        data = _parse_json(raw)
 
         for item in data.get("projects", []):
             idx = item["index"] - 1
@@ -185,7 +196,7 @@ def generate_xhs_draft(best_project: dict) -> dict:
     try:
         raw = _chat(prompt, max_tokens=2500)
         logger.info("XHS draft generated")
-        data = json.loads(raw)
+        data = _parse_json(raw)
         return {
             "project_name": best_project.get("name", ""),
             "one_liner": best_project.get("one_liner", ""),
@@ -237,7 +248,7 @@ def generate_douyin_script(best_project: dict) -> dict:
     try:
         raw = _chat(prompt, max_tokens=1500)
         logger.info("Douyin script generated")
-        data = json.loads(raw)
+        data = _parse_json(raw)
         return {
             "video_title": data.get("video_title", ""),
             "hook": data.get("hook", ""),

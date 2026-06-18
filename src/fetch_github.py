@@ -17,6 +17,8 @@ GITHUB_TOKEN = os.getenv("GITHUB_TOKEN", "").strip()
 API_URL = "https://api.github.com/search/repositories"
 PER_KEYWORD = 10
 MIN_STARS = 10
+MAX_RETRIES = 2
+RETRY_DELAY = 5  # seconds; GitHub secondary rate limit resets quickly
 
 
 def load_keywords() -> list[str]:
@@ -40,30 +42,48 @@ def _search(keyword: str) -> list[dict]:
         "per_page": PER_KEYWORD,
     }
 
-    try:
-        resp = requests.get(API_URL, headers=headers, params=params, timeout=30)
-        if resp.status_code == 403:
-            logger.warning("GitHub rate limited for keyword '%s'", keyword)
-            return []
-        resp.raise_for_status()
-        data = resp.json()
-        items = data.get("items", [])
-        logger.info("Keyword '%s': %d results", keyword, len(items))
-        return [
-            {
-                "url": item.get("html_url", ""),
-                "name": item.get("full_name", ""),
-                "stars": item.get("stargazers_count", 0),
-                "language": item.get("language") or "N/A",
-                "description": (item.get("description") or "").strip(),
-                "keyword": keyword,
-            }
-            for item in items
-            if item.get("stargazers_count", 0) >= MIN_STARS
-        ]
-    except Exception as e:
-        logger.warning("GitHub search '%s' failed: %s", keyword, e)
-        return []
+    last_error = ""
+    for attempt in range(1 + MAX_RETRIES):
+        try:
+            resp = requests.get(API_URL, headers=headers, params=params, timeout=30)
+            if resp.status_code == 403 and "rate limit" in resp.text.lower():
+                logger.warning("GitHub rate limited for keyword '%s'", keyword)
+                return []
+            if resp.status_code in (429, 502, 503, 504):
+                # Transient server-side issue — retry
+                last_error = f"HTTP {resp.status_code}"
+                logger.warning("GitHub search '%s' %s (attempt %d), retrying…", keyword, last_error, attempt + 1)
+                if attempt < MAX_RETRIES:
+                    time.sleep(RETRY_DELAY * (attempt + 1))
+                    continue
+                return []
+            resp.raise_for_status()
+            data = resp.json()
+            items = data.get("items", [])
+            logger.info("Keyword '%s': %d results", keyword, len(items))
+            return [
+                {
+                    "url": item.get("html_url", ""),
+                    "name": item.get("full_name", ""),
+                    "stars": item.get("stargazers_count", 0),
+                    "language": item.get("language") or "N/A",
+                    "description": (item.get("description") or "").strip(),
+                    "keyword": keyword,
+                }
+                for item in items
+                if item.get("stargazers_count", 0) >= MIN_STARS
+            ]
+        except requests.exceptions.Timeout:
+            last_error = "timeout"
+            logger.warning("GitHub search '%s' timeout (attempt %d), retrying…", keyword, attempt + 1)
+            if attempt < MAX_RETRIES:
+                time.sleep(RETRY_DELAY)
+        except Exception as e:
+            last_error = str(e)
+            logger.warning("GitHub search '%s' failed (attempt %d): %s", keyword, attempt + 1, e)
+            if attempt < MAX_RETRIES:
+                time.sleep(RETRY_DELAY)
+    return []
 
 
 def fetch_github_projects() -> list[dict]:
