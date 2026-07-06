@@ -289,7 +289,7 @@ def _build_html(
     <!-- Footer -->
     <div style="margin-top:32px; padding-top:16px; border-top:1px solid #e8e8e8;
                 font-size:12px; color:#999; text-align:center">
-      🐼 Panda XHS Weekly · Every Monday · Powered by DeepSeek
+      🐼 Panda XHS Weekly · Every Monday · Powered by Gemini
     </div>
   </div>
 </body>

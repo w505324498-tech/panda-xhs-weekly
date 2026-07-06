@@ -1,17 +1,19 @@
-"""Call DeepSeek API to generate XHS/Douyin content creation analysis."""
+"""Call Gemini API to generate XHS/Douyin content creation analysis."""
 
 from __future__ import annotations
 
 import json
 import logging
 import os
+import urllib.request
+import urllib.error
 
 logger = logging.getLogger(__name__)
 
-API_KEY = os.getenv("DEEPSEEK_API_KEY", "").strip()
-BASE_URL = os.getenv("DEEPSEEK_BASE_URL", "").strip() or "https://api.deepseek.com"
-MODEL = os.getenv("DEEPSEEK_MODEL", "").strip() or "deepseek-chat"
+API_KEY = os.getenv("GEMINI_API_KEY", "").strip()
+MODEL = os.getenv("GEMINI_MODEL", "").strip() or "gemini-2.5-flash"
 
+GEMINI_BASE = "https://generativelanguage.googleapis.com/v1beta/models"
 REQUEST_TIMEOUT = 120
 
 
@@ -19,35 +21,63 @@ def _parse_json(raw: str) -> any:
     """Parse JSON from LLM response, handling markdown code fences."""
     import re
     text = raw.strip()
-    # Strip markdown code fences (```json ... ``` or ``` ... ```)
     m = re.search(r"```(?:json)?\s*\n?(.*?)\n?```", text, re.DOTALL)
     if m:
         text = m.group(1).strip()
     return json.loads(text)
 
+
 AUDIENCE_TAGS = ["AI爱好者", "上班族", "内容创作者", "开发者"]
 
 
-def _client():
-    """Lazy-init the OpenAI client."""
-    from openai import OpenAI
-    return OpenAI(api_key=API_KEY, base_url=BASE_URL, timeout=REQUEST_TIMEOUT)
-
-
 def is_available() -> bool:
-    return bool(API_KEY)
+    ok = bool(API_KEY)
+    if ok:
+        logger.info("Gemini API key present (%s…%s, model=%s)",
+                    API_KEY[:4], API_KEY[-4:], MODEL)
+    return ok
 
 
 def _chat(prompt: str, max_tokens: int = 4000) -> str:
-    """Send a chat completion request and return the content."""
-    client = _client()
-    resp = client.chat.completions.create(
-        model=MODEL,
-        messages=[{"role": "user", "content": prompt}],
-        max_tokens=max_tokens,
-        temperature=0.3,
+    """Send a generateContent request to Gemini and return the text."""
+    url = f"{GEMINI_BASE}/{MODEL}:generateContent?key={API_KEY}"
+    body = json.dumps({
+        "contents": [{"parts": [{"text": prompt}]}],
+        "generationConfig": {
+            "temperature": 0.3,
+            "maxOutputTokens": max_tokens,
+            # Gemini 2.5 Flash is a thinking model — disable thinking so
+            # output tokens aren't consumed by internal reasoning.
+            "thinkingConfig": {"thinkingBudget": 0},
+        },
+    }).encode("utf-8")
+
+    req = urllib.request.Request(
+        url, data=body,
+        headers={"Content-Type": "application/json"},
     )
-    return resp.choices[0].message.content or ""
+
+    try:
+        resp = urllib.request.urlopen(req, timeout=REQUEST_TIMEOUT)
+    except urllib.error.HTTPError as e:
+        err_body = e.read().decode("utf-8", errors="replace")[:500]
+        logger.error("Gemini HTTP %s: %s", e.code, err_body)
+        raise
+
+    resp_body = resp.read().decode("utf-8")
+    data = json.loads(resp_body)
+    candidates = data.get("candidates", [])
+    if not candidates:
+        logger.warning("Gemini returned no candidates. Response: %s", resp_body[:300])
+        return ""
+    content = candidates[0].get("content", {})
+    parts = content.get("parts", [])
+    texts = [p.get("text", "") for p in parts if p.get("text")]
+    if not texts:
+        logger.warning("Gemini returned no text parts. Parts: %s",
+                       json.dumps(parts, ensure_ascii=False)[:300])
+        return ""
+    return "".join(texts)
 
 
 # ── GitHub Analysis + Best Topic Picker ──────────────────────────────
@@ -68,7 +98,7 @@ def analyze_github_and_pick_best(projects: list[dict]) -> tuple[list[dict], dict
     if not projects or not is_available():
         for p in projects:
             _fallback_project(p)
-        best_topic["recommendation_reason"] = "AI 摘要功能暂不可用，请配置 DEEPSEEK_API_KEY"
+        best_topic["recommendation_reason"] = "AI 摘要功能暂不可用，请配置 GEMINI_API_KEY"
         return projects, best_topic
 
     projects_text = "\n\n".join(
@@ -103,7 +133,7 @@ def analyze_github_and_pick_best(projects: list[dict]) -> tuple[list[dict], dict
     )
 
     try:
-        raw = _chat(prompt, max_tokens=4000)
+        raw = _chat(prompt, max_tokens=8192)
         logger.info("GitHub analysis generated")
         data = _parse_json(raw)
 
@@ -194,7 +224,7 @@ def generate_xhs_draft(best_project: dict) -> dict:
     )
 
     try:
-        raw = _chat(prompt, max_tokens=2500)
+        raw = _chat(prompt, max_tokens=8192)
         logger.info("XHS draft generated")
         data = _parse_json(raw)
         return {
@@ -246,7 +276,7 @@ def generate_douyin_script(best_project: dict) -> dict:
     )
 
     try:
-        raw = _chat(prompt, max_tokens=1500)
+        raw = _chat(prompt, max_tokens=8192)
         logger.info("Douyin script generated")
         data = _parse_json(raw)
         return {

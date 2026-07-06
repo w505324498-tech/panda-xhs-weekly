@@ -61,8 +61,8 @@ def main():
             logger.exception("Analysis crashed")
             errors.append(f"AI 分析失败: {e}")
     else:
-        logger.info("══ Step 2/4: AI analysis SKIPPED (DEEPSEEK_API_KEY not set or no projects)")
-        errors.append("⚠️ DEEPSEEK_API_KEY 未配置或无项目数据")
+        logger.info("══ Step 2/4: AI analysis SKIPPED (GEMINI_API_KEY not set or no projects)")
+        errors.append("⚠️ GEMINI_API_KEY 未配置或无项目数据")
 
     # ── 3. Generate Drafts ───────────────────────────────────────────
     xhs_draft: dict = {}
